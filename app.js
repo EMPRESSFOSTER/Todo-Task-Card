@@ -1,170 +1,269 @@
 /**
  * Todo Task Card — app.js
- * Handles: time-remaining calculation, checkbox toggle, edit/delete actions
+ * Comprehensive logic for edit mode, status/priority syncing,
+ * expand/collapse, and dynamic granular time management.
  */
 
-/* ── Configuration ───────────────────────────────── */
-// Fixed due date: May 1, 2026 at 18:00 UTC
-let DUE_DATE = new Date("2026-05-01T18:00:00Z");
-
-/* ── Element references ──────────────────────────── */
-const card          = document.querySelector('[data-testid="test-todo-card"]');
-const checkbox      = document.querySelector('[data-testid="test-todo-complete-toggle"]');
-const statusBadge   = document.querySelector('[data-testid="test-todo-status"]');
-const timeRemaining = document.querySelector('[data-testid="test-todo-time-remaining"]');
-const editBtn       = document.querySelector('[data-testid="test-todo-edit-button"]');
-const deleteBtn     = document.querySelector('[data-testid="test-todo-delete-button"]');
-
-/* ── Editable Elements ───────────────────────────── */
-const cardTitle       = document.getElementById('card-title');
-const cardDescription = document.getElementById('card-description');
-const dueDateDisplay  = document.getElementById('due-date-display');
-const editDateInput   = document.getElementById('edit-date-input');
-
-/* ── Time remaining ──────────────────────────────── */
-function getTimeRemainingText(due) {
-  const now        = Date.now();
-  const diffMs     = due.getTime() - now;
-  const diffSec    = Math.round(diffMs / 1000);
-  const diffMin    = Math.round(diffSec / 60);
-  const diffHours  = Math.round(diffMin / 60);
-  const diffDays   = Math.round(diffHours / 24);
-
-  if (Math.abs(diffMin) <= 1) {
-    return { text: "Due now!", cls: "tr--now" };
-  }
-
-  if (diffMs < 0) {
-    // Overdue
-    const absHours = Math.abs(diffHours);
-    const absDays  = Math.abs(diffDays);
-    if (absHours < 24) {
-      return {
-        text: `Overdue by ${absHours} hour${absHours !== 1 ? "s" : ""}`,
-        cls: "tr--overdue",
-      };
-    }
-    return {
-      text: `Overdue by ${absDays} day${absDays !== 1 ? "s" : ""}`,
-      cls: "tr--overdue",
-    };
-  }
-
-  // Future
-  if (diffHours < 24) {
-    if (diffHours <= 1) {
-      return { text: `Due in ${diffMin} minute${diffMin !== 1 ? "s" : ""}`, cls: "tr--soon" };
-    }
-    return { text: `Due in ${diffHours} hour${diffHours !== 1 ? "s" : ""}`, cls: "tr--soon" };
-  }
-  if (diffDays === 1) {
-    return { text: "Due tomorrow", cls: "tr--soon" };
-  }
-  if (diffDays <= 7) {
-    return { text: `Due in ${diffDays} days`, cls: "tr--soon" };
-  }
-  return { text: `Due in ${diffDays} days`, cls: "tr--ok" };
-}
-
-function updateTimeRemaining() {
-  const { text, cls } = getTimeRemainingText(DUE_DATE);
-  timeRemaining.textContent = text;
-  // Remove old state classes, add current one
-  timeRemaining.className = `time-remaining ${cls}`;
-}
-
-/* Run immediately, then refresh every 60 s */
-updateTimeRemaining();
-setInterval(updateTimeRemaining, 60_000);
-
-/* ── Checkbox toggle ─────────────────────────────── */
-const STATUS_LABELS = {
-  pending:    { text: "⏳ Pending",     label: "Status: Pending" },
-  inProgress: { text: "⚙️ In Progress", label: "Status: In Progress" },
-  done:       { text: "✅ Done",         label: "Status: Done" },
+/* ── State Management ──────────────────────────────── */
+let taskData = {
+  title: "Launch Design System",
+  description: "Finalise all design tokens, component specs, and export the Figma kit. Co-ordinate with engineering to publish the npm package and update the internal documentation site with usage examples.",
+  priority: "High",
+  status: "In Progress",
+  dueDate: new Date("2026-05-01T18:00:00Z"),
 };
 
-// Starting status (matches HTML)
-let currentStatus = "inProgress";
+/* ── Element References ────────────────────────────── */
+const card = document.querySelector('[data-testid="test-todo-card"]');
+const viewContent = document.getElementById('todo-view-content');
+const editForm = document.getElementById('todo-edit-form');
 
-function applyCompletedState(completed) {
-  if (completed) {
-    card.classList.add("is-complete");
-    statusBadge.textContent = STATUS_LABELS.done.text;
-    statusBadge.setAttribute("aria-label", STATUS_LABELS.done.label);
+// View mode elements
+const checkbox = document.querySelector('[data-testid="test-todo-complete-toggle"]');
+const titleDisplay = document.getElementById('card-title');
+const descriptionDisplay = document.getElementById('card-description');
+const priorityBadge = document.getElementById('todo-priority-badge');
+const statusBadge = document.getElementById('todo-status-badge');
+const statusControl = document.querySelector('[data-testid="test-todo-status-control"]');
+const dueDateDisplay = document.getElementById('due-date-display');
+const timeRemaining = document.getElementById('time-remaining-text');
+const overdueIndicator = document.querySelector('[data-testid="test-todo-overdue-indicator"]');
+const expandToggle = document.getElementById('expand-toggle');
+const collapsibleSection = document.getElementById('todo-collapsible-section');
+
+// Edit mode elements
+const editTitleInput = document.getElementById('edit-title');
+const editDescInput = document.getElementById('edit-description');
+const editPrioritySelect = document.getElementById('edit-priority');
+const editDueDateInput = document.getElementById('edit-due-date');
+const editBtn = document.querySelector('[data-testid="test-todo-edit-button"]');
+const deleteBtn = document.querySelector('[data-testid="test-todo-delete-button"]');
+const cancelBtn = document.querySelector('[data-testid="test-todo-cancel-button"]');
+
+/* ── Initialization ───────────────────────────────── */
+function init() {
+  updateView();
+  setupEventListeners();
+  startClock();
+}
+
+function setupEventListeners() {
+  // Checkbox toggle
+  checkbox.addEventListener('change', () => {
+    taskData.status = checkbox.checked ? "Done" : "Pending";
+    updateView();
+  });
+
+  // Status dropdown toggle
+  statusControl.addEventListener('change', (e) => {
+    taskData.status = e.target.value;
+    updateView();
+  });
+
+  // Expand/Collapse logic
+  expandToggle.addEventListener('click', toggleExpand);
+
+  // Edit Mode toggle
+  editBtn.addEventListener('click', () => enterEditMode());
+  cancelBtn.addEventListener('click', () => exitEditMode(false));
+  editForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    saveChanges();
+  });
+
+  // Delete
+  deleteBtn.addEventListener('click', handleDelete);
+
+  // Keyboard accessibility for label checkbox
+  document.querySelector('label[for="todo-complete"]').addEventListener('keydown', (e) => {
+    if (e.key === " " || e.key === "Enter") {
+      e.preventDefault();
+      checkbox.checked = !checkbox.checked;
+      checkbox.dispatchEvent(new Event('change'));
+    }
+  });
+}
+
+/* ── View Updates ──────────────────────────────────── */
+function updateView() {
+  // 1. Update Title & Description
+  titleDisplay.textContent = taskData.title;
+  descriptionDisplay.textContent = taskData.description;
+
+  // 2. Sync Status Control & Checkbox
+  statusControl.value = taskData.status;
+  checkbox.checked = taskData.status === "Done";
+  
+  // 3. Update Badges
+  statusBadge.textContent = getStatusIcon(taskData.status) + " " + taskData.status;
+  priorityBadge.textContent = getPriorityIcon(taskData.priority) + " " + taskData.priority;
+  
+  // 4. Priority Styles (for left indicator)
+  card.classList.remove('priority--high', 'priority--medium', 'priority--low');
+  card.classList.add(`priority--${taskData.priority.toLowerCase()}`);
+  
+  // 5. Status Styles
+  card.classList.remove('status--done', 'status--in-progress', 'status--pending');
+  card.classList.add(`status--${taskData.status.toLowerCase().replace(' ', '-')}`);
+
+  // 6. Time handling
+  const options = { year: 'numeric', month: 'short', day: 'numeric' };
+  dueDateDisplay.textContent = `Due ${taskData.dueDate.toLocaleDateString(undefined, options)}`;
+  dueDateDisplay.setAttribute('datetime', taskData.dueDate.toISOString());
+  
+  // 7. Auto-collapse check (if description is long)
+  if (taskData.description.length > 120) {
+    expandToggle.classList.remove('hidden');
   } else {
-    card.classList.remove("is-complete");
-    statusBadge.textContent = STATUS_LABELS[currentStatus].text;
-    statusBadge.setAttribute("aria-label", STATUS_LABELS[currentStatus].label);
+    expandToggle.classList.add('hidden');
+    collapsibleSection.classList.remove('collapsed');
+  }
+
+  refreshTimeRemaining();
+}
+
+function getStatusIcon(status) {
+  const icons = { "Pending": "⏳", "In Progress": "⚙️", "Done": "✅" };
+  return icons[status] || "";
+}
+
+function getPriorityIcon(priority) {
+  const icons = { "High": "🔴", "Medium": "🟠", "Low": "🟢" };
+  return icons[priority] || "";
+}
+
+/* ── Time Management ───────────────────────────────── */
+function refreshTimeRemaining() {
+  if (taskData.status === "Done") {
+    timeRemaining.textContent = "Completed";
+    timeRemaining.className = "time-remaining tr--now";
+    overdueIndicator.classList.add('hidden');
+    return;
+  }
+
+  const now = new Date();
+  const diffMs = taskData.dueDate - now;
+  const isOverdue = diffMs < 0;
+  const absDiff = Math.abs(diffMs);
+
+  // Indicators
+  if (isOverdue) {
+    overdueIndicator.classList.remove('hidden');
+    timeRemaining.className = "time-remaining tr--overdue";
+  } else {
+    overdueIndicator.classList.add('hidden');
+    timeRemaining.className = diffMs < (1000 * 60 * 60 * 24) ? "time-remaining tr--soon" : "time-remaining tr--ok";
+  }
+
+  // Calculate granular units
+  const minutes = Math.floor(absDiff / 60000);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  let timeStr = "";
+  if (days > 0) {
+    timeStr = `Due in ${days} day${days !== 1 ? "s" : ""}`;
+    if (isOverdue) timeStr = `Overdue by ${days} day${days !== 1 ? "s" : ""}`;
+  } else if (hours > 0) {
+    timeStr = `Due in ${hours} hour${hours !== 1 ? "s" : ""}`;
+    if (isOverdue) timeStr = `Overdue by ${hours} hour${hours !== 1 ? "s" : ""}`;
+  } else {
+    timeStr = `Due in ${minutes} minute${minutes !== 1 ? "s" : ""}`;
+    if (isOverdue) timeStr = `Overdue by ${minutes} minute${minutes !== 1 ? "s" : ""}`;
+  }
+
+  timeRemaining.textContent = timeStr;
+}
+
+function startClock() {
+  setInterval(refreshTimeRemaining, 30_000);
+}
+
+/* ── Behavior ──────────────────────────────────────── */
+function toggleExpand() {
+  const isExpanded = collapsibleSection.classList.contains('expanded');
+  if (isExpanded) {
+    collapsibleSection.classList.replace('expanded', 'collapsed');
+    expandToggle.textContent = "Show more";
+    expandToggle.setAttribute('aria-expanded', 'false');
+  } else {
+    collapsibleSection.classList.replace('collapsed', 'expanded');
+    expandToggle.textContent = "Show less";
+    expandToggle.setAttribute('aria-expanded', 'true');
   }
 }
 
-checkbox.addEventListener("change", () => {
-  applyCompletedState(checkbox.checked);
-});
+function enterEditMode() {
+  // Populate form
+  editTitleInput.value = taskData.title;
+  editDescInput.value = taskData.description;
+  editPrioritySelect.value = taskData.priority;
+  
+  // Format date for datetime-local
+  const tzOffset = taskData.dueDate.getTimezoneOffset() * 60000;
+  const localISOTime = (new Date(taskData.dueDate.getTime() - tzOffset)).toISOString().slice(0, 16);
+  editDueDateInput.value = localISOTime;
 
-// Support keyboard toggle via Space / Enter on the label
-document.querySelector('label[for="todo-complete"]').addEventListener("keydown", (e) => {
-  if (e.key === " " || e.key === "Enter") {
-    e.preventDefault();
-    checkbox.checked = !checkbox.checked;
-    checkbox.dispatchEvent(new Event("change"));
+  // Swap views
+  viewContent.classList.add('hidden');
+  editForm.classList.remove('hidden');
+  
+  // Focus management
+  editTitleInput.focus();
+  trapFocus(editForm);
+}
+
+function exitEditMode(saved = false) {
+  viewContent.classList.remove('hidden');
+  editForm.classList.add('hidden');
+  
+  // Return focus
+  editBtn.focus();
+}
+
+function saveChanges() {
+  taskData.title = editTitleInput.value;
+  taskData.description = editDescInput.value;
+  taskData.priority = editPrioritySelect.value;
+  if (editDueDateInput.value) {
+    taskData.dueDate = new Date(editDueDateInput.value);
   }
-});
+  
+  updateView();
+  exitEditMode(true);
+}
 
-/* ── Edit button ─────────────────────────────────── */
-let isEditing = false;
-const originalEditHtml = editBtn.innerHTML;
+function handleDelete() {
+  if (confirm("Delete this task?")) {
+    card.style.opacity = '0';
+    card.style.transform = 'scale(0.95)';
+    setTimeout(() => card.remove(), 300);
+  }
+}
 
-editBtn.addEventListener("click", () => {
-  if (!isEditing) {
-    isEditing = true;
-    editBtn.innerHTML = '💾 Save';
-    
-    // Enable editing on title and description
-    cardTitle.setAttribute('contenteditable', 'true');
-    cardDescription.setAttribute('contenteditable', 'true');
-    
-    // Swap date display for picker format YYYY-MM-DDTHH:mm
-    dueDateDisplay.classList.add('hidden');
-    editDateInput.classList.remove('hidden');
-    
-    const tzOffset = DUE_DATE.getTimezoneOffset() * 60000;
-    const localISOTime = (new Date(DUE_DATE.getTime() - tzOffset)).toISOString().slice(0, 16);
-    editDateInput.value = localISOTime;
+/* ── Accessibility: Focus Trapping ─────────────────── */
+function trapFocus(element) {
+  const focusableElements = element.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+  const firstFocusableElement = focusableElements[0];
+  const lastFocusableElement = focusableElements[focusableElements.length - 1];
 
-    cardTitle.focus();
-  } else {
-    isEditing = false;
-    editBtn.innerHTML = originalEditHtml;
-    
-    // Disable editing
-    cardTitle.removeAttribute('contenteditable');
-    cardDescription.removeAttribute('contenteditable');
-    
-    // Swap back to text display
-    dueDateDisplay.classList.remove('hidden');
-    editDateInput.classList.add('hidden');
-    
-    if (editDateInput.value) {
-      DUE_DATE = new Date(editDateInput.value);
-      const options = { year: 'numeric', month: 'short', day: 'numeric' };
-      dueDateDisplay.textContent = `Due ${DUE_DATE.toLocaleDateString(undefined, options)}`;
-      dueDateDisplay.setAttribute('datetime', DUE_DATE.toISOString());
-      updateTimeRemaining();
+  element.addEventListener('keydown', function(e) {
+    if (e.key !== 'Tab') return;
+
+    if (e.shiftKey) {
+      if (document.activeElement === firstFocusableElement) {
+        lastFocusableElement.focus();
+        e.preventDefault();
+      }
+    } else {
+      if (document.activeElement === lastFocusableElement) {
+        firstFocusableElement.focus();
+        e.preventDefault();
+      }
     }
-  }
-});
+  });
+}
 
-/* ── Delete button ───────────────────────────────── */
-deleteBtn.addEventListener("click", () => {
-  const confirmed = window.confirm("Delete this task? This cannot be undone.");
-  if (confirmed) {
-    card.style.transition = "opacity 300ms ease, transform 300ms ease";
-    card.style.opacity = "0";
-    card.style.transform = "scale(0.96)";
-    setTimeout(() => {
-      card.remove();
-    }, 320);
-  }
-});
+// Run init
+init();
+
